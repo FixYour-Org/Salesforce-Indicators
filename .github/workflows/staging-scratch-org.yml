@@ -7,6 +7,9 @@ on:
         description: "Branch to test"
         required: true
         default: "main"
+      email:
+        description: "Your email (for password resets / org notifications)"
+        required: true
 
 concurrency:
   group: qa-scratch-org
@@ -16,7 +19,7 @@ jobs:
   build-qa-org:
     name: "Build QA Scratch Org"
     runs-on: ubuntu-latest
-    environment: scratch-org-provisioning   # <-- triggers the required-reviewer approval gate
+    environment: scratch-org-provisioning   # triggers the required-reviewer approval gate
     steps:
       - name: Check out branch
         uses: actions/checkout@v4
@@ -33,21 +36,63 @@ jobs:
           org-name: devhub
           dev-hub: true
 
-      - name: Create scratch org and run QA flow
-        uses: cumulus-actions/run-flow-scratch@main
-        with:
-          dev-hub-auth-url: ${{ secrets.QA_DEV_HUB_AUTH_URL }}
-          org-name: dev
-          flow-name: dev_org
-
-      - name: Get org login link
+      - name: Set org alias (sanitized + truncated)
         run: |
-          echo "LOGIN_URL=$(sf org open -o dev --url-only --json | jq -r .result.url)" >> $GITHUB_ENV
+          SAFE_BRANCH=$(echo "${{ github.event.inputs.branch }}" | tr '/' '-' | tr -cd 'a-zA-Z0-9-')
+          SAFE_ACTOR=$(echo "${{ github.actor }}" | tr -cd 'a-zA-Z0-9-')
+          ORG_ALIAS="${SAFE_ACTOR:0:15}-${SAFE_BRANCH:0:20}-${{ github.run_id }}"
+          echo "ORG_ALIAS=$ORG_ALIAS" >> $GITHUB_ENV
 
-      - name: Post login link as a run summary
+      # NOTE: verify path to your dev scratch org definition file (referenced by
+      # the "dev" config in cumulusci.yml) — update the --definition-file path below
+      # to match. Using `sf org create scratch` directly (instead of `cci org scratch`)
+      # so we can pass --admin-email explicitly.
+      - name: Create scratch org with requester's email
         run: |
-          echo "### Your QA org ready for branch: ${{ github.event.inputs.branch }} 🎉" >> $GITHUB_STEP_SUMMARY
-          echo "Requested by: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
-          echo "[Click here to log in](${{ env.LOGIN_URL }})" >> $GITHUB_STEP_SUMMARY
+          sf org create scratch \
+            --target-dev-hub devhub \
+            --definition-file orgs/dev.json \
+            --alias ${{ env.ORG_ALIAS }} \
+            --admin-email "${{ github.event.inputs.email }}" \
+            --duration-days 3 \
+            --json
+
+      - name: Import org into CumulusCI keychain
+        run: cci org import ${{ env.ORG_ALIAS }} ${{ env.ORG_ALIAS }}
+
+      - name: Run dev_org flow
+        run: cci flow run dev_org --org ${{ env.ORG_ALIAS }}
+
+      - name: Get org ID (for admin traceability)
+        run: |
+          ORG_ID=$(sf org display --target-org ${{ env.ORG_ALIAS }} --json | jq -r .result.id)
+          echo "ORG_ID=$ORG_ID" >> $GITHUB_ENV
+
+      - name: Get login username
+        run: |
+          USERNAME=$(sf org display --target-org ${{ env.ORG_ALIAS }} --json | jq -r .result.username)
+          echo "USERNAME=$USERNAME" >> $GITHUB_ENV
+
+      # - name: Generate password
+      #   run: |
+      #     PASSWORD=$(sf org generate password --target-org ${{ env.ORG_ALIAS }} --json | jq -r .result.password)
+      #     echo "::add-mask::$PASSWORD"
+      #     echo "PASSWORD=$PASSWORD" >> $GITHUB_ENV
+
+      - name: Get instance login URL
+        run: |
+          URL=$(sf org display --target-org ${{ env.ORG_ALIAS }} --json | jq -r .result.instanceUrl)
+          echo "INSTANCE_URL=$URL" >> $GITHUB_ENV
+
+      - name: Post summary
+        run: |
+          echo "### QA org ready for branch: ${{ github.event.inputs.branch }} 🎉" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "This link is single-use and tied to this org. Contact an admin if it expires." >> $GITHUB_STEP_SUMMARY
+          echo "Requested by: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "Org ID: \`${{ env.ORG_ID }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Login URL:** ${{ env.INSTANCE_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Username:** \`${{ env.USERNAME }}\`" >> $GITHUB_STEP_SUMMARY
+          # echo "**Password:** \`${{ env.PASSWORD }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_This org expires in 30 days. Password resets go to the email you provided._" >> $GITHUB_STEP_SUMMARY

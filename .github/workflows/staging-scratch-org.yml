@@ -1,0 +1,53 @@
+name: Volunteer QA Scratch Org
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to test"
+        required: true
+        default: "main"
+
+concurrency:
+  group: qa-scratch-org
+  cancel-in-progress: false
+
+jobs:
+  build-qa-org:
+    name: "Build QA Scratch Org"
+    runs-on: ubuntu-latest
+    environment: scratch-org-provisioning   # <-- triggers the required-reviewer approval gate
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+
+      - name: Set up CumulusCI and SFDX
+        uses: cumulus-actions/setup-cumulus@main
+
+      - name: Authorize Dev Hub
+        uses: cumulus-actions/authorize-org@main
+        with:
+          auth-url: ${{ secrets.QA_DEV_HUB_AUTH_URL }}
+          org-name: devhub
+          dev-hub: true
+
+      - name: Create scratch org and run QA flow
+        uses: cumulus-actions/run-flow-scratch@main
+        with:
+          dev-hub-auth-url: ${{ secrets.QA_DEV_HUB_AUTH_URL }}
+          org-name: dev
+          flow-name: dev_org
+
+      - name: Get org login link
+        run: |
+          echo "LOGIN_URL=$(sf org open -o dev --url-only --json | jq -r .result.url)" >> $GITHUB_ENV
+
+      - name: Post login link as a run summary
+        run: |
+          echo "### Your QA org ready for branch: ${{ github.event.inputs.branch }} 🎉" >> $GITHUB_STEP_SUMMARY
+          echo "Requested by: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "[Click here to log in](${{ env.LOGIN_URL }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This link is single-use and tied to this org. Contact an admin if it expires." >> $GITHUB_STEP_SUMMARY

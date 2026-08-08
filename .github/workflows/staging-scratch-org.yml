@@ -54,7 +54,7 @@ jobs:
             --definition-file orgs/dev.json \
             --alias ${{ env.ORG_ALIAS }} \
             --admin-email "${{ github.event.inputs.email }}" \
-            --duration-days 3 \
+            --duration-days 30 \
             --json
 
       - name: Import org into CumulusCI keychain
@@ -84,6 +84,37 @@ jobs:
           URL=$(sf org display --target-org ${{ env.ORG_ALIAS }} --json | jq -r .result.instanceUrl)
           echo "INSTANCE_URL=$URL" >> $GITHUB_ENV
 
+      # --- Diagnostic: confirm the email actually landed on the User record ---
+      - name: Confirm admin email on User record
+        run: |
+          sf data query \
+            --query "SELECT Username, Email FROM User WHERE Username='${{ env.USERNAME }}'" \
+            --target-org ${{ env.ORG_ALIAS }} \
+            --json
+      
+      - name: Trigger native Salesforce password reset email
+        run: |
+          cat > reset_password.apex << EOF
+          User u = [SELECT Id FROM User WHERE Username = '${{ env.USERNAME }}' LIMIT 1];
+          System.resetPassword(u.Id, true);
+          EOF
+          sf apex run --file reset_password.apex --target-org ${{ env.ORG_ALIAS }}
+
+      # --- Trigger a native Salesforce password reset email (bypasses the web "Forgot Password" flow) ---
+      - name: Trigger native Salesforce password reset email
+        run: |
+          cat > reset_password.apex << EOF
+          User u = [SELECT Id FROM User WHERE Username = '${{ env.USERNAME }}' LIMIT 1];
+          System.resetPassword(u.Id, true);
+          EOF
+          sf apex run --file reset_password.apex --target-org ${{ env.ORG_ALIAS }}
+
+      # --- TEMPORARY, admin-only debugging aid. REMOVE before opening this workflow to volunteers. ---
+      - name: Get temporary debug login link (admin testing phase only)
+        run: |
+          DEBUG_URL=$(sf org open --target-org ${{ env.ORG_ALIAS }} --url-only --json | jq -r .result.url)
+          echo "DEBUG_LOGIN_URL=$DEBUG_URL" >> $GITHUB_ENV
+          
       - name: Post summary
         run: |
           echo "### QA org ready for branch: ${{ github.event.inputs.branch }} 🎉" >> $GITHUB_STEP_SUMMARY
@@ -93,6 +124,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Login URL:** ${{ env.INSTANCE_URL }}" >> $GITHUB_STEP_SUMMARY
           echo "**Username:** \`${{ env.USERNAME }}\`" >> $GITHUB_STEP_SUMMARY
-          # echo "**Password:** \`${{ env.PASSWORD }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "_This org expires in 30 days. Password resets go to the email you provided._" >> $GITHUB_STEP_SUMMARY
+          echo "_A password reset email has been sent to the address you provided._" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**[ADMIN-ONLY, TEMP] Debug login link:** ${{ env.DEBUG_LOGIN_URL }}" >> $GITHUB_STEP_SUMMARY

@@ -5,6 +5,7 @@ on:
       - 'main'
 jobs:
   upload-beta:
+    if: github.repository == 'SFDO-Community/Salesforce-Indicators'
     uses: SFDO-Community/standard-workflows/.github/workflows/beta-2gp.yml@main
     secrets:
       dev-hub-auth-url: '${{ secrets.PACKAGING_ORG_AUTH_URL }}'
